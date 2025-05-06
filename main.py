@@ -1,0 +1,72 @@
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+import openai
+import os
+
+app = FastAPI()
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+class ResumeRequest(BaseModel):
+    resume: str
+    job_description: str
+
+class AuditRequest(BaseModel):
+    resume: str
+    job_description: str
+    tailored_resume: str
+
+@app.post("/generate_resume")
+def generate_resume(data: ResumeRequest):
+    prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
+
+    Resume:
+    {data.resume}
+
+    Job Description:
+    {data.job_description}
+
+    Rewrite the resume accordingly:
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+    return {"resume": response.choices[0].message["content"]}
+
+@app.post("/audit_resume_output")
+def audit_resume_output(data: AuditRequest):
+    audit_prompt = f"""
+    You are a resume compliance auditor.
+
+    Original resume:
+    {data.resume}
+
+    Job description:
+    {data.job_description}
+
+    Tailored resume:
+    {data.tailored_resume}
+
+    Evaluate:
+    1. Factual correctness
+    2. Structural integrity
+    3. Alignment to the job
+    4. Prompt rule violations
+
+    Give a score (1–10) and return:
+    {{
+      "final_score": "✅ Pass",
+      "summary": "...",
+      "factual_issues": [...],
+      "alignment_issues": [...],
+      "suggested_edits": [...]
+    }}
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": audit_prompt}],
+        temperature=0.3
+    )
+    return {"audit": response.choices[0].message["content"]}
