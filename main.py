@@ -73,58 +73,23 @@ def audit_resume_output(data: AuditRequest):
 
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
-    diagnostic_prompt = f"""You are a resume compliance auditor and AI behavior evaluator.
+    try:
+        diagnostic_prompt = f"""You are a resume compliance auditor and AI behavior evaluator.
 
 You will now review the resume output that was generated based on the original resume and the job description provided.
 
-Your task is to analyze the tailored resume and identify any of the following issues:
+Resume:
+{data.resume}
 
----
+Job description:
+{data.job_description}
 
-### 1. Factual Inconsistency
-- Did the output fabricate any degrees, companies, roles, or dates?
-- Were metrics (like % growth or quota attainment) invented without being flagged as placeholders?
-- Were any original roles renamed, combined, or omitted?
+Tailored resume:
+{data.tailored_resume}
 
-→ If YES, list each occurrence.
+Your task is to analyze the tailored resume and return this JSON block:
 
----
-
-### 2. Structural Integrity
-- Did the revised resume preserve all jobs, dates, and employers in the original order?
-- Were sections like “Summary,” “Experience,” and “Skills” kept logically organized?
-- Was the resume reframed but not rewritten as a different version of the candidate’s life?
-
-→ If NO, describe where structure drifted or became misleading.
-
----
-
-### 3. Alignment with Job Description
-- Does the output integrate specific keywords and themes from the job post?
-- Was the tone appropriately matched (e.g., strategic, technical, collaborative)?
-- Were the most relevant roles emphasized (through bullet ordering or phrasing)?
-
-→ If NO, explain what the resume failed to reflect about the job.
-
----
-
-### 4. Prompt Compliance
-- Did the AI follow instructions like: “Do not fabricate,” “Insert placeholder if data is missing,” “Match tone,” and “Use only provided job description”?
-
-→ If NO, identify which rule(s) were violated and how.
-
----
-
-### 5. Final Scorecard
-Summarize your evaluation using this scale:
-
-- ✅ Pass – Ready for user delivery
-- ⚠️ Minor Edits Needed – Factual or tone issues to fix
-- ❌ Rework Required – Structure, accuracy, or alignment failures
-
-Return your evaluation in this JSON format:
-
-{{ 
+{{
   "run_id": "test_eval_001",
   "output_score": 4,
   "tone_score_per_section": {{
@@ -139,12 +104,18 @@ Return your evaluation in this JSON format:
   "recommendations": []
 }}
 """
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": diagnostic_prompt}],
-        temperature=0.3
-    )
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": diagnostic_prompt}],
+            temperature=0.3
+        )
 
-    return {
-        "audit_result": response.choices[0].message["content"]
-    }
+        output = response.choices[0].message["content"]
+
+        return {
+            "audit_result": output
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
