@@ -1,8 +1,17 @@
+version: 0.1
 services:
   - type: web
     name: tzun-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
+    # Optional: bring your env-var setup into version control
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: secrets/tzun_sheets_creds.json
+      - key: QA_LOG_SHEET_URL
+        value: https://docs.google.com/spreadsheets/d/1oB4wxhdf0mWIs6tBNxIZe5mUG7_WkNfWoz1okt3Oq2s
+      - key: OPENAI_API_KEY
+        fromSecret: OPENAI_API_KEY
 
