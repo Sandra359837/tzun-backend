@@ -1,12 +1,12 @@
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
-import openai
+from openai import OpenAI
 import os
 
 app = FastAPI()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ResumeRequest(BaseModel):
     resume: str
@@ -21,55 +21,55 @@ class AuditRequest(BaseModel):
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
 
-    Resume:
-    {data.resume}
+Resume:
+{data.resume}
 
-    Job Description:
-    {data.job_description}
+Job Description:
+{data.job_description}
 
-    Rewrite the resume accordingly:
-    """
-    response = openai.ChatCompletion.create(
+Rewrite the resume accordingly:
+"""
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7
     )
-    return {"resume": response.choices[0].message["content"]}
+    return {"resume": response.choices[0].message.content}
 
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
 
-    Original resume:
-    {data.resume}
+Original resume:
+{data.resume}
 
-    Job description:
-    {data.job_description}
+Job description:
+{data.job_description}
 
-    Tailored resume:
-    {data.tailored_resume}
+Tailored resume:
+{data.tailored_resume}
 
-    Evaluate:
-    1. Factual correctness
-    2. Structural integrity
-    3. Alignment to the job
-    4. Prompt rule violations
+Evaluate:
+1. Factual correctness
+2. Structural integrity
+3. Alignment to the job
+4. Prompt rule violations
 
-    Give a score (1–10) and return:
-    {{
-      "final_score": "✅ Pass",
-      "summary": "...",
-      "factual_issues": [...],
-      "alignment_issues": [...],
-      "suggested_edits": [...]
-    }}
-    """
-    response = openai.ChatCompletion.create(
+Give a score (1–10) and return:
+{{
+  "final_score": "✅ Pass",
+  "summary": "...",
+  "factual_issues": [...],
+  "alignment_issues": [...],
+  "suggested_edits": [...]
+}}
+"""
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": audit_prompt}],
         temperature=0.3
     )
-    return {"audit": response.choices[0].message["content"]}
+    return {"audit": response.choices[0].message.content}
 
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
@@ -104,18 +104,15 @@ Your task is to analyze the tailored resume and return this JSON block:
   "recommendations": []
 }}
 """
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": diagnostic_prompt}],
             temperature=0.3
         )
 
-        output = response.choices[0].message["content"]
-
         return {
-            "audit_result": output
+            "audit_result": response.choices[0].message.content
         }
 
     except Exception as e:
         return {"error": str(e)}
-
