@@ -1,13 +1,27 @@
 
+import os
+import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
-import os
+import gspread
+from google.oauth2.service_account import Credentials
 
+# Initialize FastAPI app
 app = FastAPI()
 
+# Initialize OpenAI client using v1.x.x SDK
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Google Sheets setup
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")   # e.g. "secrets/tzun_sheets_creds.json"
+SHEET_URL = os.getenv("QA_LOG_SHEET_URL")                  # e.g. your sheet URL
+creds = Credentials.from_service_account_file(CREDS_PATH, scopes=SCOPES)
+gc = gspread.authorize(creds)
+sheet = gc.open_by_url(SHEET_URL).worksheet("benchmark_test_cases")
+
+# Request schemas
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
@@ -17,6 +31,7 @@ class AuditRequest(BaseModel):
     job_description: str
     tailored_resume: str
 
+# Endpoint: Generate tailored resume
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
@@ -27,7 +42,7 @@ Resume:
 Job Description:
 {data.job_description}
 
-Rewrite the resume accordingly:
+Rewrite the resume accordingly.
 """
     response = client.chat.completions.create(
         model="gpt-4",
@@ -36,6 +51,7 @@ Rewrite the resume accordingly:
     )
     return {"resume": response.choices[0].message.content}
 
+# Endpoint: Basic audit of resume output
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
@@ -53,9 +69,9 @@ Evaluate:
 1. Factual correctness
 2. Structural integrity
 3. Alignment to the job
-4. Prompt rule violations
+4. Prompt rule compliance
 
-Give a score (1–10) and return:
+Return a JSON object:
 {{
   "final_score": "✅ Pass",
   "summary": "...",
@@ -71,12 +87,12 @@ Give a score (1–10) and return:
     )
     return {"audit": response.choices[0].message.content}
 
+# Endpoint: Diagnostic evaluator with real-time Sheets logging
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
     try:
+        # Build the diagnostic prompt
         diagnostic_prompt = f"""You are a resume compliance auditor and AI behavior evaluator.
-
-You will now review the resume output that was generated based on the original resume and the job description provided.
 
 Resume:
 {data.resume}
@@ -87,11 +103,13 @@ Job description:
 Tailored resume:
 {data.tailored_resume}
 
-Your task is to analyze the tailored resume and return this JSON block:
-
+Return a strict JSON object in this format:
 {{
   "run_id": "test_eval_001",
   "output_score": 4,
+  "persona_context": "mid-level B2B SaaS sales professional",
+  "purpose": "Validate tone & hallucination controls",
+  "status": "✅ Passed",
   "tone_score_per_section": {{
     "summary": "bold",
     "experience": "neutral",
@@ -104,15 +122,29 @@ Your task is to analyze the tailored resume and return this JSON block:
   "recommendations": []
 }}
 """
+        # Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": diagnostic_prompt}],
             temperature=0.3
         )
+        content = response.choices[0].message.content
 
-        return {
-            "audit_result": response.choices[0].message.content
-        }
+        # Parse JSON from the model
+        result = json.loads(content)
+
+        # Append a new row to Google Sheets
+        sheet.append_row([
+            result.get("run_id", ""),
+            result.get("output_score", ""),
+            result.get("persona_context", ""),
+            result.get("purpose", ""),
+            result.get("status", ""),
+            content.replace("\n", " ")[:500]  # first 500 chars of raw JSON
+        ])
+
+        # Return the structured result
+        return result
 
     except Exception as e:
         return {"error": str(e)}
