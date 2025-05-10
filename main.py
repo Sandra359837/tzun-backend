@@ -1,31 +1,24 @@
-import os
-import json
-import requests
-from fastapi import FastAPI
+import os, json, requests
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
-# ─────────────────────────────────────────────────
-# App & OpenAI client
-# ─────────────────────────────────────────────────
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL")
 
-# ─────────────────────────────────────────────────
-# Webhook URL for Google Apps Script
-# ─────────────────────────────────────────────────
-WEBHOOK_URL = os.getenv("https://script.google.com/macros/s/AKfycbx9B2TDWlrK_r1gf0XEHq6NHmAnO9VxZ72eV9o7ehSD-tJla9cgknLAd5Omn7Ps8dCi/exec")
+# Root health-check (logs each hit)
+@app.get("/")
+async def root(request: Request):
+    print("🌱 Received request at / from", request.client.host)
+    return {"status": "FastAPI is up ✅"}
 
-# ─────────────────────────────────────────────────
-# Debug endpoint to verify the webhook URL
-# ─────────────────────────────────────────────────
+# Debug webhook URL (logs the value)
 @app.get("/debug_webhook_url")
 def debug_webhook_url():
     url = os.getenv("SHEETS_WEBHOOK_URL", "")
-    return {
-        "sheets_webhook_url": url or "⚠️ Not set",
-        "length": len(url)
-    }
+    print("🔗 SHEETS_WEBHOOK_URL =", url)
+    return {"sheets_webhook_url": url or "⚠️ Not set", "length": len(url)}
 
 # ─────────────────────────────────────────────────
 # Request Schemas
