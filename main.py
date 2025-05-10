@@ -1,4 +1,3 @@
-
 import os
 import json
 from fastapi import FastAPI
@@ -7,21 +6,26 @@ from openai import OpenAI
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Initialize FastAPI app
+# ─────────────────────────────────────────────────
+# App & OpenAI client
+# ─────────────────────────────────────────────────
 app = FastAPI()
-
-# Initialize OpenAI client using v1.x.x SDK
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Google Sheets setup
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")   # e.g. "secrets/tzun_sheets_creds.json"
-SHEET_URL = os.getenv("QA_LOG_SHEET_URL")                  # e.g. your sheet URL
+# ─────────────────────────────────────────────────
+# Google Sheets logging setup
+# ─────────────────────────────────────────────────
+SCOPES     = ["https://www.googleapis.com/auth/spreadsheets"]
+CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")   # ex: "secrets/tzun_sheets_creds.json"
+SHEET_URL  = os.getenv("QA_LOG_SHEET_URL")                # ex: your sheet URL
+
 creds = Credentials.from_service_account_file(CREDS_PATH, scopes=SCOPES)
-gc = gspread.authorize(creds)
+gc    = gspread.authorize(creds)
 sheet = gc.open_by_url(SHEET_URL).worksheet("benchmark_test_cases")
 
-# Request schemas
+# ─────────────────────────────────────────────────
+# Request Schemas
+# ─────────────────────────────────────────────────
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
@@ -31,7 +35,9 @@ class AuditRequest(BaseModel):
     job_description: str
     tailored_resume: str
 
-# Endpoint: Generate tailored resume
+# ─────────────────────────────────────────────────
+# 1) Generate tailored resume
+# ─────────────────────────────────────────────────
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
@@ -42,8 +48,7 @@ Resume:
 Job Description:
 {data.job_description}
 
-Rewrite the resume accordingly.
-"""
+Rewrite the resume accordingly."""
     response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
@@ -51,7 +56,9 @@ Rewrite the resume accordingly.
     )
     return {"resume": response.choices[0].message.content}
 
-# Endpoint: Basic audit of resume output
+# ─────────────────────────────────────────────────
+# 2) Basic audit of a tailored resume
+# ─────────────────────────────────────────────────
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
@@ -78,8 +85,7 @@ Return a JSON object:
   "factual_issues": [...],
   "alignment_issues": [...],
   "suggested_edits": [...]
-}}
-"""
+}}"""
     response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": audit_prompt}],
@@ -87,7 +93,9 @@ Return a JSON object:
     )
     return {"audit": response.choices[0].message.content}
 
-# Endpoint: Diagnostic evaluator with real-time Sheets logging
+# ─────────────────────────────────────────────────
+# 3) Diagnostic evaluator + real-time Sheets logging
+# ─────────────────────────────────────────────────
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
     try:
@@ -120,8 +128,7 @@ Return a strict JSON object in this format:
   "consistency_score": 82,
   "flagged_issues": [],
   "recommendations": []
-}}
-"""
+}}"""
         # Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4",
@@ -130,10 +137,10 @@ Return a strict JSON object in this format:
         )
         content = response.choices[0].message.content
 
-        # Parse JSON from the model
+        # Parse the JSON string
         result = json.loads(content)
 
-        # Append a new row to Google Sheets
+        # Append a row to Google Sheets
         sheet.append_row([
             result.get("run_id", ""),
             result.get("output_score", ""),
@@ -143,7 +150,7 @@ Return a strict JSON object in this format:
             content.replace("\n", " ")[:500]  # first 500 chars of raw JSON
         ])
 
-        # Return the structured result
+        # Return the parsed audit object
         return result
 
     except Exception as e:
