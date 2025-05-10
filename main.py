@@ -6,7 +6,10 @@ from openai import OpenAI
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 WEBHOOK_URL = os.getenv("https://script.google.com/macros/s/AKfycbx9B2TDWlrK_r1gf0XEHq6NHmAnO9VxZ72eV9o7ehSD-tJla9cgknLAd5Omn7Ps8dCi/exec")
-
+   return {
+        "sheets_webhook_url": url or "⚠️ Not set",
+        "length": len(url)
+    }
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
