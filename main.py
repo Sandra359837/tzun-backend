@@ -1,10 +1,9 @@
 import os
 import json
+import requests
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
-import gspread
-from google.oauth2.service_account import Credentials
 
 # ─────────────────────────────────────────────────
 # App & OpenAI client
@@ -13,15 +12,9 @@ app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ─────────────────────────────────────────────────
-# Google Sheets logging setup
+# Webhook URL for Google Apps Script
 # ─────────────────────────────────────────────────
-SCOPES     = ["https://www.googleapis.com/auth/spreadsheets"]
-CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")   # ex: "secrets/tzun_sheets_creds.json"
-SHEET_URL  = os.getenv("QA_LOG_SHEET_URL")                # ex: your sheet URL
-
-creds = Credentials.from_service_account_file(CREDS_PATH, scopes=SCOPES)
-gc    = gspread.authorize(creds)
-sheet = gc.open_by_url(SHEET_URL).worksheet("benchmark_test_cases")
+WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL")
 
 # ─────────────────────────────────────────────────
 # Request Schemas
@@ -94,7 +87,7 @@ Return a JSON object:
     return {"audit": response.choices[0].message.content}
 
 # ─────────────────────────────────────────────────
-# 3) Diagnostic evaluator + real-time Sheets logging
+# 3) Diagnostic evaluator + Apps-Script Webhook logging
 # ─────────────────────────────────────────────────
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
@@ -129,7 +122,7 @@ Return a strict JSON object in this format:
   "flagged_issues": [],
   "recommendations": []
 }}"""
-        # Call OpenAI
+        # Call OpenAI to get the audit
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": diagnostic_prompt}],
@@ -137,20 +130,21 @@ Return a strict JSON object in this format:
         )
         content = response.choices[0].message.content
 
-        # Parse the JSON string
+        # Parse GPT’s JSON output
         result = json.loads(content)
 
-        # Append a row to Google Sheets
-        sheet.append_row([
-            result.get("run_id", ""),
-            result.get("output_score", ""),
-            result.get("persona_context", ""),
-            result.get("purpose", ""),
-            result.get("status", ""),
-            content.replace("\n", " ")[:500]  # first 500 chars of raw JSON
-        ])
+        # Send the result to your Apps-Script webhook
+        try:
+            requests.post(
+                WEBHOOK_URL,
+                headers={"Content-Type": "application/json"},
+                json=result
+            )
+        except Exception as webhook_err:
+            # Log but do not fail the request
+            print("⚠️ Webhook delivery failed:", webhook_err)
 
-        # Return the parsed audit object
+        # Return the structured audit object
         return result
 
     except Exception as e:
