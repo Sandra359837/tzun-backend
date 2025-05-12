@@ -1,12 +1,13 @@
 import os
 import json
 import requests
+import uuid
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
 # ─────────────────────────────────────────────────
-# App & OpenAI client
+# App & OpenAI client setup
 # ─────────────────────────────────────────────────
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -19,24 +20,23 @@ if not WEBHOOK_URL:
     raise RuntimeError("❌ SHEETS_WEBHOOK_URL environment variable is not set!")
 
 # ─────────────────────────────────────────────────
-# Root health-check (logs each hit)
+#  Health‐check & debug endpoints
 # ─────────────────────────────────────────────────
 @app.get("/")
 async def root(request: Request):
     print("🌱 Received request at / from", request.client.host)
     return {"status": "FastAPI is up ✅"}
 
-# ─────────────────────────────────────────────────
-# Debug webhook URL (logs the value)
-# ─────────────────────────────────────────────────
 @app.get("/debug_webhook_url")
 def debug_webhook_url():
-    url = WEBHOOK_URL
-    print("🔗 SHEETS_WEBHOOK_URL =", url)
-    return {"sheets_webhook_url": url, "length": len(url)}
+    print("🔗 SHEETS_WEBHOOK_URL =", WEBHOOK_URL)
+    return {
+        "sheets_webhook_url": WEBHOOK_URL,
+        "length": len(WEBHOOK_URL)
+    }
 
 # ─────────────────────────────────────────────────
-# Request Schemas
+#  Request schemas
 # ─────────────────────────────────────────────────
 class ResumeRequest(BaseModel):
     resume: str
@@ -48,7 +48,7 @@ class AuditRequest(BaseModel):
     tailored_resume: str
 
 # ─────────────────────────────────────────────────
-# 1) Generate tailored resume
+#  1) Generate tailored resume
 # ─────────────────────────────────────────────────
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
@@ -63,13 +63,13 @@ Job Description:
 Rewrite the resume accordingly."""
     response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role":"user", "content":prompt}],
         temperature=0.7
     )
     return {"resume": response.choices[0].message.content}
 
 # ─────────────────────────────────────────────────
-# 2) Basic audit of a tailored resume
+#  2) Basic audit of a tailored resume
 # ─────────────────────────────────────────────────
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
@@ -100,18 +100,21 @@ Return a JSON object:
 }}"""
     response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "user", "content": audit_prompt}],
+        messages=[{"role":"user", "content":audit_prompt}],
         temperature=0.3
     )
     return {"audit": response.choices[0].message.content}
 
 # ─────────────────────────────────────────────────
-# 3) Diagnostic evaluator + Apps-Script Webhook logging
+#  3) Diagnostic evaluator + Apps‐Script webhook logging
 # ─────────────────────────────────────────────────
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
+    # 1) Generate a unique run_id
+    run_id = uuid.uuid4().hex
+
     try:
-        # Build the diagnostic prompt
+        # 2) Build your diagnostic prompt (no static run_id)
         diagnostic_prompt = f"""You are a resume compliance auditor and AI behavior evaluator.
 
 Resume:
@@ -123,46 +126,44 @@ Job description:
 Tailored resume:
 {data.tailored_resume}
 
-Return a strict JSON object in this format:
-{{
-  "run_id": "test_eval_001",
-  "output_score": 4,
-  "persona_context": "mid-level B2B SaaS sales professional",
-  "purpose": "Validate tone & hallucination controls",
-  "status": "✅ Passed",
-  "tone_score_per_section": {{
-    "summary": "bold",
-    "experience": "neutral",
-    "consistency_rating": 82
-  }},
-  "bracketed_item_log": [],
-  "hallucination_score": 1,
-  "consistency_score": 82,
-  "flagged_issues": [],
-  "recommendations": []
-}}"""
-        # Call OpenAI
+Return a strict JSON object with these fields:
+- output_score (integer)
+- persona_context (string)
+- purpose (string)
+- status (string)
+- tone_score_per_section (object)
+- bracketed_item_log (array)
+- hallucination_score (integer)
+- consistency_score (integer)
+- flagged_issues (array)
+- recommendations (array)
+
+Do NOT include any extra fields."""
+        # 3) Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[{"role": "user", "content": diagnostic_prompt}],
+            messages=[{"role":"user", "content":diagnostic_prompt}],
             temperature=0.3
         )
         content = response.choices[0].message.content
 
-        # Parse the JSON string
+        # 4) Parse the JSON
         result = json.loads(content)
 
-        # Send to your Apps-Script webhook
+        # 5) Inject our unique run_id
+        result["run_id"] = run_id
+
+        # 6) Fire the webhook (Apps‐Script)
         try:
             requests.post(
                 WEBHOOK_URL,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type":"application/json"},
                 json=result
             )
         except Exception as webhook_err:
             print("⚠️ Webhook delivery failed:", webhook_err)
 
-        # Return the structured audit object
+        # 7) Return the augmented result
         return result
 
     except Exception as e:
