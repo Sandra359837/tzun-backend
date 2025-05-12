@@ -1,12 +1,12 @@
 version: 0.1
+
 services:
   - type: web
     name: tzun-api
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    plan: free
-    # Optional: bring your env-var setup into version control
     envVars:
       - key: GOOGLE_APPLICATION_CREDENTIALS
         value: secrets/tzun_sheets_creds.json
@@ -15,3 +15,13 @@ services:
       - key: OPENAI_API_KEY
         fromSecret: OPENAI_API_KEY
 
+jobs:
+  - name: nightly-diagnostic-run
+    # Runs every night at 03:00 UTC
+    schedule: "0 3 * * *"
+    # It will execute your runner script at the repo root
+    command: python nightly_runner.py
+    envVars:
+      - key: BACKEND_URL
+        # adjust to match your actual Render service URL
+        value: https://tzun-api.onrender.com/diagnostic_evaluator
