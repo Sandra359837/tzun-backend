@@ -5,7 +5,7 @@ print("🚀 nightly_runner starting…", file=sys.stderr)
 
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
-    "https://tzun-backend-1.onrender.com/diagnostic_evaluator"
+    "https://tzun-backend.onrender.com/diagnostic_evaluator"
 )
 print(f"↗️ BACKEND_URL = {BACKEND_URL}", file=sys.stderr)
 
