@@ -10,35 +10,38 @@ from pathlib import Path
 print("🚀 nightly_runner starting…", file=sys.stderr)
 
 # ──────────────────────────────────────────────
-# 2) Determine the path to nightly_payloads.json
+# 2) Resolve payload file path
 # ──────────────────────────────────────────────
-base_dir = Path(__file__).parent
-payload_path = base_dir / "tests" / "nightly_payloads.json"
-print(f"📂 Looking for payload file at: {payload_path}", file=sys.stderr)
+base_dir   = Path(__file__).parent
+payload_fp = base_dir / "tests" / "nightly_payloads.json"
+print(f"📂 Looking for payloads at: {payload_fp}", file=sys.stderr)
 
-if not payload_path.exists():
-    print(f"❌ Payload file not found at {payload_path}", file=sys.stderr)
+if not payload_fp.exists():
+    print(f"❌ Payload file NOT found at {payload_fp}", file=sys.stderr)
     sys.exit(1)
 
 # ──────────────────────────────────────────────
-# 3) Read & preview the file contents
+# 3) Read & preview file contents
 # ──────────────────────────────────────────────
 try:
-    raw = payload_path.read_text(encoding="utf-8")
+    raw = payload_fp.read_text(encoding="utf-8")
     preview = raw.replace("\n", " ")[:200]
-    print(f"📄 Payload preview: {preview}…", file=sys.stderr)
+    print(f"📄 Payload preview (200 chars): {preview}…", file=sys.stderr)
 except Exception as e:
     print("❌ Error reading payload file:", e, file=sys.stderr)
     sys.exit(1)
 
 # ──────────────────────────────────────────────
-# 4) Parse JSON
+# 4) Parse JSON with detailed error if it fails
 # ──────────────────────────────────────────────
 try:
     payloads = json.loads(raw)
     print(f"✅ Successfully loaded {len(payloads)} payload(s)", file=sys.stderr)
 except json.JSONDecodeError as e:
+    # Show the exact error and the snippet around the problem
+    snip = raw[e.pos-20:e.pos+20]
     print("❌ JSONDecodeError:", e, file=sys.stderr)
+    print(f"…around pos {e.pos}: “{snip}”", file=sys.stderr)
     sys.exit(1)
 
 # ──────────────────────────────────────────────
@@ -57,9 +60,9 @@ for idx, payload in enumerate(payloads, start=1):
     try:
         resp = requests.post(
             BACKEND_URL,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type":"application/json"},
             json=payload
         )
         print(f"[{idx}/{len(payloads)}] {resp.status_code}: {resp.text}", file=sys.stderr)
     except Exception as e:
-        print(f"❌ Request failed for payload #{idx}:", e, file=sys.stderr)
+        print(f"❌ Request failed for payload #{idx}: {e}", file=sys.stderr)
