@@ -1,49 +1,28 @@
 name: Nightly Diagnostic Run
 
-# Manually trigger or run every day at 03:00 UTC
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 3 * * *'   # every night at 03:00 UTC
 
 jobs:
   run-diagnostics:
     runs-on: ubuntu-latest
-
-    # Inject your Render URL as an env var
-    env:
-      BACKEND_URL: ${{ secrets.BACKEND_URL }}
-
     steps:
-      # 1) Get your code
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      # 2) Install Python
-      - name: Set up Python 3.x
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
-      # 3) Cache pip between runs
-      - name: Cache pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      # 4) Install your dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 5) (Optional) Show directory tree to verify file locations
-      - name: List repository contents
-        run: ls -R .
-
-      # 6) Run the nightly test harness
       - name: Run nightly diagnostics
-        run: python nightly_runner.py
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+        run: |
+          python nightly_runner.py
