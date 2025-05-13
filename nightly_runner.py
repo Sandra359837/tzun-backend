@@ -1,7 +1,6 @@
-import os
-import json
-import requests
+import os, json, requests, sys
 
+print("🚀 nightly_runner starting…", file=sys.stderr)
 # URL of your Render-hosted FastAPI endpoint
 BACKEND_URL = os.getenv("BACKEND_URL", "https://tzun-backend.onrender.com/diagnostic_evaluator")
 
