@@ -10,7 +10,7 @@ from pathlib import Path
 print("🚀 nightly_runner starting…", file=sys.stderr)
 
 # ──────────────────────────────────────────────
-# 2) Resolve payload file path
+# 2) Resolve payload file path relative to this script
 # ──────────────────────────────────────────────
 base_dir   = Path(__file__).parent
 payload_fp = base_dir / "tests" / "nightly_payloads.json"
@@ -21,27 +21,27 @@ if not payload_fp.exists():
     sys.exit(1)
 
 # ──────────────────────────────────────────────
-# 3) Read & preview file contents
+# 3) Read & preview the JSON
 # ──────────────────────────────────────────────
 try:
     raw = payload_fp.read_text(encoding="utf-8")
     preview = raw.replace("\n", " ")[:200]
-    print(f"📄 Payload preview (200 chars): {preview}…", file=sys.stderr)
+    print(f"📄 Payload preview (first 200 chars): {preview}…", file=sys.stderr)
 except Exception as e:
     print("❌ Error reading payload file:", e, file=sys.stderr)
     sys.exit(1)
 
 # ──────────────────────────────────────────────
-# 4) Parse JSON with detailed error if it fails
+# 4) Parse with detailed error reporting
 # ──────────────────────────────────────────────
 try:
     payloads = json.loads(raw)
-    print(f"✅ Successfully loaded {len(payloads)} payload(s)", file=sys.stderr)
+    print(f"✅ Loaded {len(payloads)} payload(s)", file=sys.stderr)
 except json.JSONDecodeError as e:
-    # Show the exact error and the snippet around the problem
-    snip = raw[e.pos-20:e.pos+20]
+    # show the exact error and context
+    snip = raw[max(0, e.pos-20):e.pos+20]
     print("❌ JSONDecodeError:", e, file=sys.stderr)
-    print(f"…around pos {e.pos}: “{snip}”", file=sys.stderr)
+    print(f"…context around pos {e.pos}: “{snip}”", file=sys.stderr)
     sys.exit(1)
 
 # ──────────────────────────────────────────────
