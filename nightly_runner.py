@@ -2,67 +2,57 @@ import os
 import sys
 import json
 import requests
-from pathlib import Path
 
-# ──────────────────────────────────────────────
-# 1) Startup debug
-# ──────────────────────────────────────────────
 print("🚀 nightly_runner starting…", file=sys.stderr)
 
-# ──────────────────────────────────────────────
-# 2) Resolve payload file path relative to this script
-# ──────────────────────────────────────────────
-base_dir   = Path(__file__).parent
-payload_fp = base_dir / "tests" / "nightly_payloads.json"
-print(f"📂 Looking for payloads at: {payload_fp}", file=sys.stderr)
+# 1) Endpoint under test
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "https://tzun-backend.onrender.com/diagnostic_evaluator"
+)
+print("↗️ BACKEND_URL =", BACKEND_URL, file=sys.stderr)
 
-if not payload_fp.exists():
-    print(f"❌ Payload file NOT found at {payload_fp}", file=sys.stderr)
-    sys.exit(1)
+# 2) Load your test cases
+PAYLOAD_FILE = os.path.join(os.path.dirname(__file__), "tests", "nightly_payloads.json")
+print("📂 Loading payloads from", PAYLOAD_FILE, file=sys.stderr)
 
-# ──────────────────────────────────────────────
-# 3) Read & preview the JSON
-# ──────────────────────────────────────────────
-try:
-    raw = payload_fp.read_text(encoding="utf-8")
-    preview = raw.replace("\n", " ")[:200]
-    print(f"📄 Payload preview (first 200 chars): {preview}…", file=sys.stderr)
-except Exception as e:
-    print("❌ Error reading payload file:", e, file=sys.stderr)
-    sys.exit(1)
+def load_payloads():
+    with open(PAYLOAD_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-# ──────────────────────────────────────────────
-# 4) Parse with detailed error reporting
-# ──────────────────────────────────────────────
-try:
-    payloads = json.loads(raw)
-    print(f"✅ Loaded {len(payloads)} payload(s)", file=sys.stderr)
-except json.JSONDecodeError as e:
-    # show the exact error and context
-    snip = raw[max(0, e.pos-20):e.pos+20]
-    print("❌ JSONDecodeError:", e, file=sys.stderr)
-    print(f"…context around pos {e.pos}: “{snip}”", file=sys.stderr)
-    sys.exit(1)
+def run_all_tests():
+    payloads = load_payloads()
+    total = len(payloads)
+    print(f"✅ Loaded {total} payload(s)", file=sys.stderr)
 
-# ──────────────────────────────────────────────
-# 5) Validate BACKEND_URL
-# ──────────────────────────────────────────────
-BACKEND_URL = os.getenv("BACKEND_URL")
-if not BACKEND_URL:
-    print("❌ BACKEND_URL env var not set", file=sys.stderr)
-    sys.exit(1)
-print(f"↗️ BACKEND_URL = {BACKEND_URL}", file=sys.stderr)
+    exit_code = 0
+    for i, payload in enumerate(payloads, start=1):
+        print(f"➡️ Test [{i}/{total}] …", file=sys.stderr)
+        try:
+            resp = requests.post(
+                BACKEND_URL,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=60
+            )
+        except Exception as e:
+            print(f"❌ Request error: {e}", file=sys.stderr)
+            exit_code = 1
+            continue
 
-# ──────────────────────────────────────────────
-# 6) Execute each test
-# ──────────────────────────────────────────────
-for idx, payload in enumerate(payloads, start=1):
-    try:
-        resp = requests.post(
-            BACKEND_URL,
-            headers={"Content-Type":"application/json"},
-            json=payload
-        )
-        print(f"[{idx}/{len(payloads)}] {resp.status_code}: {resp.text}", file=sys.stderr)
-    except Exception as e:
-        print(f"❌ Request failed for payload #{idx}: {e}", file=sys.stderr)
+        status = resp.status_code
+        body   = resp.text
+        print(f"[{i}/{total}] {status}: {body}", file=sys.stderr)
+
+        # failing non-200 responses
+        if status != 200:
+            exit_code = 1
+
+    if exit_code != 0:
+        print("❗ Some tests failed", file=sys.stderr)
+    else:
+        print("🎉 All tests passed", file=sys.stderr)
+    sys.exit(exit_code)
+
+if __name__ == "__main__":
+    run_all_tests()
