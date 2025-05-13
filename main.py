@@ -1,19 +1,21 @@
 import os
 import json
+import uuid
 import requests
-from fastapi import FastAPI, Request
+
+from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
 
 app = FastAPI()
 
-# ─── Environment / Secrets ────────────────────────────────────────────────────
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
-SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL")
+# ——— OpenAI client ———
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+# ——— Apps-Script webhook URL ———
+WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
-# ─── Request Schemas ──────────────────────────────────────────────────────────
+# ——— Pydantic Request Schemas ———
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
@@ -23,19 +25,12 @@ class AuditRequest(BaseModel):
     job_description: str
     tailored_resume: str
 
-# ─── Health & Debug ────────────────────────────────────────────────────────────
+# ——— 1) Root health-check ———
 @app.get("/")
-async def root(request: Request):
+def root():
     return {"status": "FastAPI is up ✅"}
 
-@app.get("/debug_webhook_url")
-def debug_webhook_url():
-    return {
-        "sheets_webhook_url": SHEETS_WEBHOOK_URL or "⚠️ Not set",
-        "length": len(SHEETS_WEBHOOK_URL or "")
-    }
-
-# ─── 1) Generate Tailored Resume ──────────────────────────────────────────────
+# ——— 2) Generate tailored resume ———
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
@@ -47,14 +42,14 @@ Job Description:
 {data.job_description}
 
 Rewrite the resume accordingly."""
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7
     )
-    return {"resume": response.choices[0].message.content}
+    return {"resume": resp.choices[0].message.content}
 
-# ─── 2) Basic Audit Endpoint ───────────────────────────────────────────────────
+# ——— 3) Basic audit of a tailored resume ———
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
@@ -74,21 +69,25 @@ Evaluate:
 3. Alignment to the job
 4. Prompt rule compliance
 
-Return a JSON object with keys:
+Return a JSON object with fields:
 final_score, summary, factual_issues, alignment_issues, suggested_edits
 """
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": audit_prompt}],
         temperature=0.3
     )
-    return {"audit": response.choices[0].message.content}
+    return {"audit": resp.choices[0].message.content}
 
-# ─── 3) Diagnostic Evaluator + Webhook Logging ─────────────────────────────────
+# ——— 4) Diagnostic evaluator + Sheets logging ———
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
-    # 1) Build the diagnostic prompt
-    diagnostic_prompt = f"""You are a resume compliance auditor and AI behavior evaluator.
+    # 1) Unique run_id
+    run_id = str(uuid.uuid4())
+
+    # 2) Build the diagnostic LLM prompt
+    diagnostic_prompt = f"""
+You are a resume compliance auditor and AI behavior evaluator.
 
 Resume:
 {data.resume}
@@ -99,41 +98,47 @@ Job description:
 Tailored resume:
 {data.tailored_resume}
 
-Return a strict JSON object in this format:
+Return *only* a JSON object in this exact schema:
 {{
-  "run_id": "GENERATE_A_UUID_OR_TIMESTAMP",
-  "output_score": 0–10,
-  "persona_context": "...",
-  "purpose": "...",
-  "status": "✅ Passed / ⚠️ Minor Edits / ❌ Rework",
-  "tone_score_per_section": {{ /* summary, experience, consistency_rating */ }},
-  "bracketed_item_log": [...],
-  "hallucination_score": 0–10,
-  "consistency_score": 0–100,
-  "flagged_issues": [...],
-  "recommendations": [...]
-}}"""
-    # 2) Ask GPT
-    response = client.chat.completions.create(
+  "run_id": "{run_id}",
+  "output_score": <int 1–10>,
+  "persona_context": <string>,
+  "purpose": <string>,
+  "status": <"✅ Passed"|"⚠️ Minor Edits"|"❌ Rework">,
+  "tone_score_per_section": {{
+    "summary":<int>,
+    "experience":<int>,
+    "consistency_rating":<int>
+  }},
+  "bracketed_item_log": [<string>,…],
+  "hallucination_score": <int>,
+  "consistency_score": <int>,
+  "flagged_issues": [<string>,…],
+  "recommendations": [<string>,…]
+}}
+"""
+
+    # 3) Call OpenAI
+    resp = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": diagnostic_prompt}],
         temperature=0.3
     )
-    content = response.choices[0].message.content
+    content = resp.choices[0].message.content
 
-    # 3) Parse it
+    # 4) Parse JSON
     result = json.loads(content)
+    result["run_id"] = run_id  # ensure it
 
-    # 4) Fire the Apps Script webhook (if set)
-    if SHEETS_WEBHOOK_URL:
-        try:
-            requests.post(
-                SHEETS_WEBHOOK_URL,
-                headers={"Content-Type": "application/json"},
-                json=result
-            )
-        except Exception as webhook_err:
-            print("⚠️ Webhook delivery failed:", webhook_err)
+    # 5) Fire to Google Sheets via Apps-Script
+    try:
+        requests.post(
+            WEBHOOK_URL,
+            headers={"Content-Type": "application/json"},
+            json=result
+        )
+    except Exception as e:
+        print("⚠️ Webhook delivery failed:", e)
 
-    # 5) Return the structured JSON to the caller
+    # 6) Return the audit JSON
     return result
