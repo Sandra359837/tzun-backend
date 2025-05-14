@@ -1,21 +1,27 @@
+# main.py
+
 import os
 import json
 import uuid
 import requests
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from openai import OpenAI
+
 from title_bucketer import classify_title
 
-# —— Initialize FastAPI & OpenAI client ——
 app = FastAPI()
+
+# ——— OpenAI client ———
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# —— Your Apps-Script webhook URL (env-var SHEETS_WEBHOOK_URL) ——
+# ——— Apps-Script webhook URL ———
 WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
-# —— Pydantic schemas for incoming JSON ——
+# ─────────────────────────────────────────────────
+# Request Schemas
+# ─────────────────────────────────────────────────
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
@@ -25,12 +31,16 @@ class AuditRequest(BaseModel):
     job_description: str
     tailored_resume: str
 
-# —— 1) Health-check endpoint ——
+# ─────────────────────────────────────────────────
+# 0) Health-check
+# ─────────────────────────────────────────────────
 @app.get("/")
-def root():
+async def root(request: Request):
     return {"status": "FastAPI is up ✅"}
 
-# —— 2) Generate tailored resume ——
+# ─────────────────────────────────────────────────
+# 1) Generate tailored resume
+# ─────────────────────────────────────────────────
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
@@ -49,7 +59,9 @@ Rewrite the resume accordingly."""
     )
     return {"resume": resp.choices[0].message.content}
 
-# —— 3) Basic audit of a tailored resume ——
+# ─────────────────────────────────────────────────
+# 2) Basic audit of a tailored resume
+# ─────────────────────────────────────────────────
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
@@ -69,7 +81,7 @@ Evaluate:
 3. Alignment to the job
 4. Prompt rule compliance
 
-Return a JSON object with fields:
+Return a JSON object with these fields:
 final_score, summary, factual_issues, alignment_issues, suggested_edits
 """
     resp = client.chat.completions.create(
@@ -79,13 +91,15 @@ final_score, summary, factual_issues, alignment_issues, suggested_edits
     )
     return {"audit": resp.choices[0].message.content}
 
-# —— 4) Diagnostic evaluator + dynamic bucketing + Sheets logging ——
+# ─────────────────────────────────────────────────
+# 3) Diagnostic evaluator + bucket classification + Sheets logging
+# ─────────────────────────────────────────────────
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
-    # 1) Generate a unique run_id
+    # 3.1 Generate a unique run_id
     run_id = str(uuid.uuid4())
 
-    # 2) Build the diagnostic LLM prompt (inject run_id if you like)
+    # 3.2 Build the diagnostic LLM prompt
     diagnostic_prompt = f"""
 You are a resume compliance auditor and AI behavior evaluator.
 
@@ -98,16 +112,14 @@ Job description:
 Tailored resume:
 {data.tailored_resume}
 
-Return *only* a JSON object EXACTLY in this schema:
+Return *only* a JSON object **exactly** in this format:
 {{
   "run_id": "{run_id}",
-  "output_score": <int 1–10>,
+  "output_score": <integer 1–10>,
   "persona_context": <string>,
   "purpose": <string>,
-  "status": <"✅ Passed"|"⚠️ Minor Edits"|"❌ Rework">,
-  "tone_score_per_section": {{
-    "summary":<int>,"experience":<int>,"consistency_rating":<int>
-  }},
+  "status": <"✅ Passed" | "⚠️ Minor Edits" | "❌ Rework">,
+  "tone_score_per_section": {{ "summary":<int>,"experience":<int>,"consistency_rating":<int> }},
   "bracketed_item_log": [<string>,…],
   "hallucination_score": <int>,
   "consistency_score": <int>,
@@ -115,7 +127,8 @@ Return *only* a JSON object EXACTLY in this schema:
   "recommendations": [<string>,…]
 }}
 """
-    # 3) Call OpenAI
+
+    # 3.3 Call OpenAI
     resp = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": diagnostic_prompt}],
@@ -123,24 +136,24 @@ Return *only* a JSON object EXACTLY in this schema:
     )
     content = resp.choices[0].message.content
 
-    # 4) Parse the model’s JSON output
+    # 3.4 Parse the JSON the model returned
     result = json.loads(content)
-    result["run_id"] = run_id  # enforce our generated ID
+    result["run_id"] = run_id  # ensure consistency
 
-    # 5) Dynamically bucket the persona_context title
-    bucket, confidence = classify_title(result["persona_context"])
+    # 3.5 Dynamically bucket the persona_context
+    bucket, confidence = classify_title(result.get("persona_context", ""))
     result["bucket"]            = bucket
     result["bucket_confidence"] = confidence
 
-    # 6) Send the final audit object to your Apps-Script webhook
+    # 3.6 Fire off the row to Google Sheets via your Apps-Script webhook
     try:
         requests.post(
             WEBHOOK_URL,
             headers={"Content-Type": "application/json"},
             json=result
         )
-    except Exception as e:
-        print("⚠️ Webhook delivery failed:", e)
+    except Exception as webhook_err:
+        print("⚠️ Webhook delivery failed:", webhook_err)
 
-    # 7) Return the structured audit
+    # 3.7 Return the structured audit + bucket info
     return result
