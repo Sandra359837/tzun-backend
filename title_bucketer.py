@@ -1,64 +1,60 @@
 # title_bucketer.py
+
 import os
 import json
-import numpy as np
-from openai import OpenAI
+from github import Github
 
-# Initialize the OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# ─── Config ────────────────────────────────────────
+BUCKETS_FILE = "buckets.json"
+REPO_NAME    = "Sandra359837/tzun-backend"  # <— your GitHub repo
+BRANCH       = "main"                       # <— the branch to commit to
 
-# Path to your buckets datastore
-BUCKET_FILE = "buckets.json"
-
-# Cosine-similarity threshold for “matching” an existing bucket
-THRESHOLD = 0.8
-
+# ─── Helpers ───────────────────────────────────────
 def load_buckets():
-    """Load existing buckets or return empty list if none."""
+    """Read the existing JSON array of buckets, or return [] if missing."""
     try:
-        with open(BUCKET_FILE, "r") as f:
+        with open(BUCKETS_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return []
 
-def save_buckets(buckets):
-    """Save updated buckets back to disk."""
-    with open(BUCKET_FILE, "w") as f:
+def save_buckets_and_commit(buckets: list):
+    """
+    1) Overwrite the local buckets.json
+    2) Commit that change back to GitHub via the PyGithub API.
+    """
+    # 1) Write locally
+    with open(BUCKETS_FILE, "w") as f:
         json.dump(buckets, f, indent=2)
 
+    # 2) Push up to GitHub
+    gh   = Github(os.environ["GITHUB_TOKEN"])
+    repo = gh.get_repo(REPO_NAME)
+
+    # We need the current file SHA to update it
+    source_file = repo.get_contents(BUCKETS_FILE, ref=BRANCH)
+
+    repo.update_file(
+        path    = BUCKETS_FILE,
+        message = "chore: update dynamic buckets",
+        content = json.dumps(buckets, indent=2),
+        sha     = source_file.sha,
+        branch  = BRANCH
+    )
+
+# ─── Main API ───────────────────────────────────────
 def classify_title(title: str):
     """
-    Given a raw title string, returns (bucket_name, confidence).
-    Creates a new bucket if no good match is found.
+    Normalize the incoming persona_context (title).  
+    If it’s new, append & commit it.
+    Returns a (bucket, confidence) pair.
     """
-    buckets = load_buckets()
+    normalized = title.strip().lower()
+    buckets    = load_buckets()
 
-    # 1) Embed the new title
-    resp    = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=title
-    )
-    new_emb = np.array(resp.data[0].embedding)
+    if normalized not in buckets:
+        buckets.append(normalized)
+        save_buckets_and_commit(buckets)
 
-    # 2) Compare to each existing bucket
-    best, best_score = None, -1.0
-    for b in buckets:
-        b_emb = np.array(b["embedding"])
-        score = float(new_emb.dot(b_emb) /
-                      (np.linalg.norm(new_emb) * np.linalg.norm(b_emb)))
-        if score > best_score:
-            best, best_score = b, score
-
-    # 3) If it’s a strong match, use that bucket
-    if best_score >= THRESHOLD:
-        return best["bucket_name"], best_score
-
-    # 4) Otherwise, create a new bucket entry
-    new_bucket = {
-        "bucket_name":    title,
-        "title_examples": [title],
-        "embedding":      new_emb.tolist()
-    }
-    buckets.append(new_bucket)
-    save_buckets(buckets)
-    return title, None
+    # You can replace this 1.0 with a real confidence score if desired
+    return normalized, 1.0
