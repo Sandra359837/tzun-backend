@@ -6,16 +6,16 @@ import requests
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
+from title_bucketer import classify_title
 
+# —— Initialize FastAPI & OpenAI client ——
 app = FastAPI()
-
-# ——— OpenAI client ———
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ——— Apps-Script webhook URL ———
+# —— Your Apps-Script webhook URL (env-var SHEETS_WEBHOOK_URL) ——
 WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
-# ——— Pydantic Request Schemas ———
+# —— Pydantic schemas for incoming JSON ——
 class ResumeRequest(BaseModel):
     resume: str
     job_description: str
@@ -25,12 +25,12 @@ class AuditRequest(BaseModel):
     job_description: str
     tailored_resume: str
 
-# ——— 1) Root health-check ———
+# —— 1) Health-check endpoint ——
 @app.get("/")
 def root():
     return {"status": "FastAPI is up ✅"}
 
-# ——— 2) Generate tailored resume ———
+# —— 2) Generate tailored resume ——
 @app.post("/generate_resume")
 def generate_resume(data: ResumeRequest):
     prompt = f"""You are a resume rewriter. Improve the following resume to match this job description:
@@ -49,7 +49,7 @@ Rewrite the resume accordingly."""
     )
     return {"resume": resp.choices[0].message.content}
 
-# ——— 3) Basic audit of a tailored resume ———
+# —— 3) Basic audit of a tailored resume ——
 @app.post("/audit_resume_output")
 def audit_resume_output(data: AuditRequest):
     audit_prompt = f"""You are a resume compliance auditor.
@@ -79,13 +79,13 @@ final_score, summary, factual_issues, alignment_issues, suggested_edits
     )
     return {"audit": resp.choices[0].message.content}
 
-# ——— 4) Diagnostic evaluator + Sheets logging ———
+# —— 4) Diagnostic evaluator + dynamic bucketing + Sheets logging ——
 @app.post("/diagnostic_evaluator")
 def diagnostic_evaluator(data: AuditRequest):
-    # 1) Unique run_id
+    # 1) Generate a unique run_id
     run_id = str(uuid.uuid4())
 
-    # 2) Build the diagnostic LLM prompt
+    # 2) Build the diagnostic LLM prompt (inject run_id if you like)
     diagnostic_prompt = f"""
 You are a resume compliance auditor and AI behavior evaluator.
 
@@ -98,7 +98,7 @@ Job description:
 Tailored resume:
 {data.tailored_resume}
 
-Return *only* a JSON object in this exact schema:
+Return *only* a JSON object EXACTLY in this schema:
 {{
   "run_id": "{run_id}",
   "output_score": <int 1–10>,
@@ -106,9 +106,7 @@ Return *only* a JSON object in this exact schema:
   "purpose": <string>,
   "status": <"✅ Passed"|"⚠️ Minor Edits"|"❌ Rework">,
   "tone_score_per_section": {{
-    "summary":<int>,
-    "experience":<int>,
-    "consistency_rating":<int>
+    "summary":<int>,"experience":<int>,"consistency_rating":<int>
   }},
   "bracketed_item_log": [<string>,…],
   "hallucination_score": <int>,
@@ -117,7 +115,6 @@ Return *only* a JSON object in this exact schema:
   "recommendations": [<string>,…]
 }}
 """
-
     # 3) Call OpenAI
     resp = client.chat.completions.create(
         model="gpt-4",
@@ -126,11 +123,16 @@ Return *only* a JSON object in this exact schema:
     )
     content = resp.choices[0].message.content
 
-    # 4) Parse JSON
+    # 4) Parse the model’s JSON output
     result = json.loads(content)
-    result["run_id"] = run_id  # ensure it
+    result["run_id"] = run_id  # enforce our generated ID
 
-    # 5) Fire to Google Sheets via Apps-Script
+    # 5) Dynamically bucket the persona_context title
+    bucket, confidence = classify_title(result["persona_context"])
+    result["bucket"]            = bucket
+    result["bucket_confidence"] = confidence
+
+    # 6) Send the final audit object to your Apps-Script webhook
     try:
         requests.post(
             WEBHOOK_URL,
@@ -140,5 +142,5 @@ Return *only* a JSON object in this exact schema:
     except Exception as e:
         print("⚠️ Webhook delivery failed:", e)
 
-    # 6) Return the audit JSON
+    # 7) Return the structured audit
     return result
