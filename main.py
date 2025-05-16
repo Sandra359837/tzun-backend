@@ -4,6 +4,8 @@ import os
 import json
 import uuid
 import requests
+import random
+import pathlib
 
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
@@ -12,6 +14,8 @@ from openai import OpenAI
 from title_bucketer import classify_title
 
 app = FastAPI()
+
+MATRIX = json.loads(pathlib.Path("stem_matrix.json").read_text())
 
 # ——— OpenAI client ———
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -140,12 +144,18 @@ Return *only* a JSON object **exactly** in this format:
     result = json.loads(content)
     result["run_id"] = run_id  # ensure consistency
 
-    # 3.5 Dynamically bucket the persona_context
+    # 3.5 Inject a memory-aware summary stem
+    archetype = result.get("summary_archetype", "")
+    stems     = MATRIX.get(archetype, [])
+    if stems:
+        result["summary_stem"] = random.choice(stems)
+
+    # 3.6 Dynamically bucket the persona_context
     bucket, confidence = classify_title(result.get("persona_context", ""))
     result["bucket"]            = bucket
     result["bucket_confidence"] = confidence
 
-    # 3.6 Fire off the row to Google Sheets via your Apps-Script webhook
+    # 3.7 Fire off the row to Google Sheets via your Apps-Script webhook
     try:
         requests.post(
             WEBHOOK_URL,
@@ -155,5 +165,5 @@ Return *only* a JSON object **exactly** in this format:
     except Exception as webhook_err:
         print("⚠️ Webhook delivery failed:", webhook_err)
 
-    # 3.7 Return the structured audit + bucket info
+    # 3.8 Return the structured audit + bucket info
     return result
